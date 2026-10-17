@@ -172,6 +172,31 @@ public final class Authentication {
                 verificationHandler: verificationHandler
             )
             
+        case nil where (statusDictionary["hsc"] as? Int) == 409:
+            // Apple accepted the password and has already pushed a code to the trusted
+            // devices, but names no second step in `au`. Treating that as a finished
+            // sign-in makes the app token request fail with -22411, so ask for the code
+            // (without requesting another one) and validate it, then sign in again.
+            guard let verificationHandler = verificationHandler else {
+                throw AppleAPIError.requiresTwoFactorAuthentication
+            }
+            
+            try await requestTrustedDeviceTwoFactorCode(
+                dsid: dsid,
+                idmsToken: idmsToken,
+                anisetteData: macOSClientInfo,
+                verificationHandler: verificationHandler,
+                requestCode: false
+            )
+            
+            return try await authenticate(
+                appleID: unsanitizedAppleID,
+                password: password,
+                anisetteData: anisetteData,
+                smsClientInfo: smsClientInfo,
+                verificationHandler: verificationHandler
+            )
+            
         default:
             guard let sessionKey = decryptedDictionary["sk"] as? Data,
                   let c = decryptedDictionary["c"] as? Data
@@ -381,7 +406,8 @@ public final class Authentication {
         dsid: String,
         idmsToken: String,
         anisetteData: AnisetteData,
-        verificationHandler: @escaping (@escaping (String?) -> Void) async -> Void
+        verificationHandler: @escaping (@escaping (String?) -> Void) async -> Void,
+        requestCode: Bool = true
     ) async throws {
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
         let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
@@ -393,7 +419,9 @@ public final class Authentication {
             anisetteData: anisetteData
         )
         
-        let _ = try? await AppleAPI.shared.session.data(for: request)
+        if requestCode {
+            let _ = try? await AppleAPI.shared.session.data(for: request)
+        }
         
         
         let verificationCode = try await withCheckedThrowingContinuation { continuation in
